@@ -1,0 +1,21 @@
+# Emacs temporary files
+*~
+\#*\#
+.\#*
+
+# Emacs auto-save files
+*.elc
+*.eln
+
+# Flycheck
+flycheck_*.el
+
+# Package building
+dist/
+*.tar
+
+# Emacs directory variables
+.dir-locals.el
+
+# macOS
+.DS_Store
