@@ -195,10 +195,10 @@ Choose 'latest', 'oldest', or enter a specific version."
       (progn
         (setenv "MB_EDITION" "ee")
         (setenv "MB_PREMIUM_EMBEDDING_TOKEN" (pcase metabase-config-ee-token
-                                               ('all-features (getenv "MB_ALL_FEATURES_TOKEN"))
-                                               ('starter-cloud (getenv "MB_STARTER_CLOUD_TOKEN"))
-                                               ('pro-cloud (getenv "MB_PRO_CLOUD_TOKEN"))
-                                               ('pro-self-hosted (getenv "MB_PRO_SELF_HOSTED_TOKEN"))
+                                               ('all-features (getenv "MBDEV_ALL_FEATURES_TOKEN"))
+                                               ('starter-cloud (getenv "MBDEV_STARTER_CLOUD_TOKEN"))
+                                               ('pro-cloud (getenv "MBDEV_PRO_CLOUD_TOKEN"))
+                                               ('pro-self-hosted (getenv "MBDEV_PRO_SELF_HOSTED_TOKEN"))
                                                ('none "")))
         (setenv "METASTORE_DEV_SERVER_URL" "https://token-check.staging.metabase.com"))
     (progn
