@@ -76,6 +76,11 @@
   :type 'string
   :group 'metabase-dev)
 
+(defcustom metabase-dev-config-config-file "dev/config.yml"
+  "The config file to use for Metabase"
+  :type 'string
+  :group 'metabase-dev)
+
 ;;; --- Configuration Setter Functions -----------------------------------------
 
 ;;;###autoload
@@ -127,6 +132,13 @@ Choose `latest`, `oldest`, or enter a specific version."
   (setq metabase-dev-config-additional-aliases aliases)
   (message "Additional aliases set to: %s" aliases))
 
+;;;###autoload
+(defun metabase-dev-set-config-file (file)
+  "Set the config file for metabase dev, e.g. `dev/config.yml'"
+  (interactive "sFile: ")
+  (setq metabase-dev-config-config-file file)
+  (message "Config file set to: %s" file))
+
 ;;; --- Helper Functions -------------------------------------------------------
 
 (defun metabase-dev-reset-env! ()
@@ -167,7 +179,7 @@ Choose `latest`, `oldest`, or enter a specific version."
 
   ;; Set common environment variables
   (setenv "MB_DANGEROUS_UNSAFE_ENABLE_TESTING_H2_CONNECTIONS_DO_NOT_ENABLE" "true")
-  (setenv "MB_CONFIG_FILE_PATH" "dev/config.yml")
+  (setenv "MB_CONFIG_FILE_PATH" metabase-dev-config-config-file)
 
   ;; Set edition-specific env vars
   (if metabase-dev-config-is-ee
@@ -240,12 +252,14 @@ Choose `latest`, `oldest`, or enter a specific version."
                 (if metabase-dev-config-is-ee "EE" "OSS")
                 metabase-dev-config-ee-token)
         (format "\tDB: %s (%s)\n" metabase-dev-config-db-type metabase-dev-config-db-version)
+        (format "\tConfig file: %s\n" metabase-dev-config-config-file)
         (format "\tAdditional aliases: %s\n" metabase-dev-config-additional-aliases)))
      ["Configuration"
       ("e" "Toggle Edition (EE/OSS)" metabase-dev-toggle-edition :transient t)
       ("t" "Set Token Type" metabase-dev-set-token-type :transient t)
       ("d" "Set Database Type" metabase-dev-set-db-type :transient t)
       ("v" "Set DB Version" metabase-dev-set-db-version :transient t)
+      ("f" "Set Config File" metabase-dev-set-config-file :transient t)
       ("a" "Set Additional Aliases" metabase-dev-set-additional-aliases :transient t)]
      ["Actions"
       ("r" "Restart REPL" metabase-dev-restart-repl)
