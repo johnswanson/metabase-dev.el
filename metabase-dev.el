@@ -67,13 +67,8 @@
   :group 'metabase-dev)
 
 (defcustom metabase-dev-config-db-version "latest"
-  "Database version. Can be 'latest', 'oldest', or a specific version string."
+  "Database version. Can be `latest`, `oldest`, or a specific version string."
   :type 'string
-  :group 'metabase-dev)
-
-(defcustom metabase-dev-config-test-mode nil
-  "Whether to include test aliases when starting the REPL."
-  :type 'boolean
   :group 'metabase-dev)
 
 (defcustom metabase-dev-config-additional-aliases ""
@@ -116,7 +111,7 @@
 ;;;###autoload
 (defun metabase-dev-set-db-version (version)
   "Set the database version to VERSION.
-Choose 'latest', 'oldest', or enter a specific version."
+Choose `latest`, `oldest`, or enter a specific version."
   (interactive
    (list (let ((choice (completing-read "Version: " '("latest" "oldest" "specific") nil t)))
            (if (string= choice "specific")
@@ -124,13 +119,6 @@ Choose 'latest', 'oldest', or enter a specific version."
              choice))))
   (setq metabase-dev-config-db-version version)
   (message "Database version set to: %s" version))
-
-;;;###autoload
-(defun metabase-dev-toggle-test-mode ()
-  "Toggle test mode on/off."
-  (interactive)
-  (setq metabase-dev-config-test-mode (not metabase-dev-config-test-mode))
-  (message "Test mode: %s" (if metabase-dev-config-test-mode "ON" "OFF")))
 
 ;;;###autoload
 (defun metabase-dev-set-additional-aliases (aliases)
@@ -179,7 +167,6 @@ Choose 'latest', 'oldest', or enter a specific version."
 
   ;; Set common environment variables
   (setenv "MB_DANGEROUS_UNSAFE_ENABLE_TESTING_H2_CONNECTIONS_DO_NOT_ENABLE" "true")
-  (setenv "MB_ENABLE_TEST_ENDPOINTS" (if metabase-dev-config-test-mode "true" "false"))
   (setenv "MB_CONFIG_FILE_PATH" "dev/config.yml")
 
   ;; Set edition-specific env vars
@@ -203,8 +190,6 @@ Choose 'latest', 'oldest', or enter a specific version."
          (ee-aliases  (if metabase-dev-config-is-ee
                           ":ee:ee-dev"))
 
-         (test-aliases (if metabase-dev-config-test-mode ":test" ""))
-
          (db-alias (unless (eq metabase-dev-config-db-type 'h2)
                      (format ":db/%s-%s"
                              metabase-dev-config-db-type
@@ -212,7 +197,6 @@ Choose 'latest', 'oldest', or enter a specific version."
 
          (all-aliases (concat base-aliases
                               (or ee-aliases "")
-                              test-aliases
                               (or db-alias "")
                               metabase-dev-config-additional-aliases)))
 
@@ -250,17 +234,18 @@ Choose 'latest', 'oldest', or enter a specific version."
     "Metabase REPL configuration and control menu."
     [:description
      (lambda ()
-       (format "Metabase REPL Config\n\tEdition: %s (token: %s)\n\tDB: %s (%s)\n\tTest Mode: %s"
-               (if metabase-dev-config-is-ee "EE" "OSS")
-               metabase-dev-config-ee-token
-               metabase-dev-config-db-type metabase-dev-config-db-version
-               (if metabase-dev-config-test-mode "ON" "OFF")))
+       (concat
+        "Metabase REPL Config\n"
+        (format "\tEdition: %s (token %s)\n"
+                (if metabase-dev-config-is-ee "EE" "OSS")
+                metabase-dev-config-ee-token)
+        (format "\tDB: %s (%s)\n" metabase-dev-config-db-type metabase-dev-config-db-version)
+        (format "\tAdditional aliases: %s\n" metabase-dev-config-additional-aliases)))
      ["Configuration"
       ("e" "Toggle Edition (EE/OSS)" metabase-dev-toggle-edition :transient t)
+      ("t" "Set Token Type" metabase-dev-set-token-type :transient t)
       ("d" "Set Database Type" metabase-dev-set-db-type :transient t)
       ("v" "Set DB Version" metabase-dev-set-db-version :transient t)
-      ("t" "Set Token Type" metabase-dev-set-token-type :transient t)
-      ("z" "Toggle Test Mode" metabase-dev-toggle-test-mode :transient t)
       ("a" "Set Additional Aliases" metabase-dev-set-additional-aliases :transient t)]
      ["Actions"
       ("r" "Restart REPL" metabase-dev-restart-repl)
