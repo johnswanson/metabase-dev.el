@@ -171,12 +171,12 @@ Make sure to set these in your shell environment before starting Emacs if you're
 When you start a REPL with `metabase-jack-in-with-config`:
 
 1. The package resets all `MB_*` environment variables
+2. Starts (or restarts) the DB, if necessary (using docker).
 2. Sets up environment variables based on your configuration
 3. Builds a Clojure CLI aliases string combining:
    - Base aliases: `:otel:dev:drivers:drivers-dev`
    - EE aliases: `:ee:ee-dev` (if EE mode)
    - Test aliases: `:test` (if test mode enabled)
-   - Database alias: `:db/{type}-{version}` (unless H2)
    - Any additional aliases you've configured
 4. Calls `cider-jack-in-clj` with the constructed aliases
 5. Automatically evaluates `(dev)` in the REPL after connection
