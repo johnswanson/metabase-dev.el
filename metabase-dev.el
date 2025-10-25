@@ -141,6 +141,203 @@ Choose `latest`, `oldest`, or enter a specific version."
 
 ;;; --- Helper Functions -------------------------------------------------------
 
+(defvar metabase-dev-port-file ".metabase-dev.el.ports"
+  "File to store database container port mappings.")
+
+(defun metabase-dev-port-file-path ()
+  "Get the full path to the port file in the project root."
+  (expand-file-name metabase-dev-port-file (projectile-project-root)))
+
+(defun metabase-dev-read-port-file ()
+  "Read the port file and return its contents as a plist."
+  (let ((file-path (metabase-dev-port-file-path)))
+    (when (file-exists-p file-path)
+      (with-temp-buffer
+        (insert-file-contents file-path)
+        (read (buffer-string))))))
+
+(defun metabase-dev-write-port-file (data)
+  "Write DATA (a plist) to the port file."
+  (let ((file-path (metabase-dev-port-file-path)))
+    (with-temp-file file-path
+      (prin1 data (current-buffer)))))
+
+(defun metabase-dev-get-container-info ()
+  "Get container info for the current database configuration."
+  (let* ((port-data (metabase-dev-read-port-file))
+         (db-key (intern (format "%s-%s" metabase-dev-config-db-type metabase-dev-config-db-version))))
+    (plist-get port-data db-key)))
+
+(defun metabase-dev-save-container-info (container-name container-id port image-digest)
+  "Save container info to the port file."
+  (let* ((port-data (or (metabase-dev-read-port-file) '()))
+         (db-key (intern (format "%s-%s" metabase-dev-config-db-type metabase-dev-config-db-version)))
+         (info (list :container-name container-name
+                     :container-id container-id
+                     :port port
+                     :image-digest image-digest
+                     :db-type metabase-dev-config-db-type
+                     :db-version metabase-dev-config-db-version)))
+    (setq port-data (plist-put port-data db-key info))
+    (metabase-dev-write-port-file port-data)))
+
+(defun metabase-dev-container-name ()
+  "Generate a container name for the current database configuration."
+  (format "metabase-dev-%s-%s" metabase-dev-config-db-type metabase-dev-config-db-version))
+
+(defun metabase-dev-docker-image-name ()
+  "Get the Docker image name for the current database configuration."
+  (pcase metabase-dev-config-db-type
+    ('postgres (format "postgres:%s" metabase-dev-config-db-version))
+    ('mysql (format "mysql:%s" metabase-dev-config-db-version))
+    ('mariadb (format "mariadb:%s" metabase-dev-config-db-version))))
+
+(defun metabase-dev-container-port ()
+  "Get the internal container port for the current database type."
+  (pcase metabase-dev-config-db-type
+    ('postgres "5432")
+    ('mysql "3306")
+    ('mariadb "3306")))
+
+(defun metabase-dev-check-container-exists (container-name)
+  "Check if a Docker container with CONTAINER-NAME exists."
+  (let ((output (shell-command-to-string
+                 (format "docker ps -aq --filter name=^%s$" container-name))))
+    (not (string-empty-p (string-trim output)))))
+
+(defun metabase-dev-check-container-running (container-name)
+  "Check if a Docker container with CONTAINER-NAME is running."
+  (let ((output (shell-command-to-string
+                 (format "docker ps -q --filter name=^%s$" container-name))))
+    (not (string-empty-p (string-trim output)))))
+
+(defun metabase-dev-get-container-port (container-name)
+  "Get the exposed host port for CONTAINER-NAME."
+  (let* ((internal-port (metabase-dev-container-port))
+         (output (shell-command-to-string
+                  (format "docker port %s %s" container-name internal-port))))
+    (when (string-match ":\\([0-9]+\\)$" output)
+      (match-string 1 output))))
+
+(defun metabase-dev-get-image-digest (image-name)
+  "Get the digest of the Docker image IMAGE-NAME."
+  (let ((output (shell-command-to-string
+                 (format "docker inspect --format='{{.Id}}' %s" image-name))))
+    (string-trim output)))
+
+(defun metabase-dev-start-container (container-name)
+  "Start an existing Docker container."
+  (shell-command-to-string (format "docker start %s" container-name)))
+
+(defun metabase-dev-stop-container (container-name)
+  "Stop a running Docker container."
+  (shell-command-to-string (format "docker stop %s" container-name)))
+
+(defun metabase-dev-remove-container (container-name)
+  "Remove a Docker container."
+  (shell-command-to-string (format "docker rm -f %s" container-name)))
+
+(defun metabase-dev-create-container ()
+  "Create and start a new Docker container for the current database configuration.
+Returns a plist with :container-name, :container-id, :port, and :image-digest."
+  (let* ((container-name (metabase-dev-container-name))
+         (image-name (metabase-dev-docker-image-name))
+         (internal-port (metabase-dev-container-port))
+         (env-vars (pcase metabase-dev-config-db-type
+                     ('postgres "-e POSTGRES_USER=metabase -e POSTGRES_PASSWORD=password -e POSTGRES_DB=metabase")
+                     ('mysql "-e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=metabase -e MYSQL_USER=metabase -e MYSQL_PASSWORD=password")
+                     ('mariadb "-e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=metabase -e MYSQL_USER=metabase -e MYSQL_PASSWORD=password")))
+         (cmd (format "docker run -d --name %s %s -p 0:%s %s"
+                      container-name env-vars internal-port image-name)))
+
+    ;; Pull the image first to ensure we have the latest version
+    (message "Pulling Docker image: %s" image-name)
+    (shell-command-to-string (format "docker pull %s" image-name))
+
+    ;; Create and start the container
+    (message "Creating container: %s" container-name)
+    (let ((container-id (string-trim (shell-command-to-string cmd))))
+
+      ;; Wait a moment for the container to fully start
+      (sleep-for 2)
+
+      ;; Get the exposed port
+      (let ((port (metabase-dev-get-container-port container-name))
+            (digest (metabase-dev-get-image-digest image-name)))
+
+        (list :container-name container-name
+              :container-id container-id
+              :port port
+              :image-digest digest)))))
+
+(defun metabase-dev-ensure-container (fresh)
+  "Ensure a database container is running.
+If FRESH is non-nil, remove and recreate the container.
+Returns container info plist."
+  (let ((container-name (metabase-dev-container-name)))
+    (cond
+     ;; Fresh database requested: remove old container and create new
+     (fresh
+      (when (metabase-dev-check-container-exists container-name)
+        (message "Removing existing container: %s" container-name)
+        (metabase-dev-remove-container container-name))
+      (metabase-dev-create-container))
+
+     ;; Container exists and is running: reuse it
+     ((metabase-dev-check-container-running container-name)
+      (message "Reusing existing container: %s" container-name)
+      (let ((info (metabase-dev-get-container-info)))
+        (unless info
+          ;; Container exists but not in our port file, reconstruct info
+          (let ((port (metabase-dev-get-container-port container-name))
+                (image-name (metabase-dev-docker-image-name))
+                (container-id (string-trim (shell-command-to-string
+                                           (format "docker ps -q --filter name=^%s$" container-name)))))
+            (setq info (list :container-name container-name
+                           :container-id container-id
+                           :port port
+                           :image-digest (metabase-dev-get-image-digest image-name)))
+            (metabase-dev-save-container-info container-name container-id port
+                                             (plist-get info :image-digest))))
+        info))
+
+     ;; Container exists but is stopped: restart it
+     ((metabase-dev-check-container-exists container-name)
+      (message "Starting stopped container: %s" container-name)
+      (metabase-dev-start-container container-name)
+      (sleep-for 2)
+      (let ((info (metabase-dev-get-container-info)))
+        (unless info
+          (let ((port (metabase-dev-get-container-port container-name))
+                (image-name (metabase-dev-docker-image-name))
+                (container-id (string-trim (shell-command-to-string
+                                           (format "docker ps -aq --filter name=^%s$" container-name)))))
+            (setq info (list :container-name container-name
+                           :container-id container-id
+                           :port port
+                           :image-digest (metabase-dev-get-image-digest image-name)))
+            (metabase-dev-save-container-info container-name container-id port
+                                             (plist-get info :image-digest))))
+        info))
+
+     ;; No container exists: create new one
+     (t
+      (metabase-dev-create-container)))))
+
+(defun metabase-dev-build-connection-uri (port)
+  "Build a connection URI for the current database configuration using PORT."
+  (pcase metabase-dev-config-db-type
+    ('postgres (format "postgresql://metabase:password@localhost:%s/metabase" port))
+    ('mysql (format "mysql://metabase:password@localhost:%s/metabase" port))
+    ('mariadb (format "mysql://metabase:password@localhost:%s/metabase" port))))
+
+(defun metabase-dev-build-connection-command (port)
+  "Build a shell connection command for the current database configuration using PORT."
+  (pcase metabase-dev-config-db-type
+    ('postgres (format "PGPASSWORD=password psql -U metabase -h localhost -p %s metabase" port))
+    ('mysql (format "mysql -u metabase -ppassword -h localhost -P %s metabase" port))
+    ('mariadb (format "mysql -u metabase -ppassword -h localhost -P %s metabase" port))))
+
 (defun metabase-dev-reset-env! ()
   "Reset all MB_* environment variables to start Metabase cleanly."
   (dolist (env process-environment)
@@ -175,7 +372,24 @@ Choose `latest`, `oldest`, or enter a specific version."
       (let ((db-file (format-time-string "/tmp/metabase_%Y%m%d%H%M%S")))
         (setenv "MB_DB_TYPE" "h2")
         (setenv "MB_DB_FILE" db-file)
-        (setenv "MB_DANGEROUS_UNSAFE_ENABLE_TESTING_H2_CONNECTIONS_DO_NOT_ENABLE" "true")))
+        (setenv "MB_DANGEROUS_UNSAFE_ENABLE_TESTING_H2_CONNECTIONS_DO_NOT_ENABLE" "true"))
+    ;; For non-H2 databases, ensure container is running and set connection URI
+    (let* ((container-info (metabase-dev-ensure-container nil))
+           (port (plist-get container-info :port))
+           (connection-uri (metabase-dev-build-connection-uri port)))
+      (message "Container info: %s" container-info)
+      (message "Using database at port %s" port)
+
+      ;; Save container info to port file
+      (metabase-dev-save-container-info
+       (plist-get container-info :container-name)
+       (plist-get container-info :container-id)
+       port
+       (plist-get container-info :image-digest))
+
+      ;; Set Metabase environment variables
+      (setenv "MB_DB_TYPE" (symbol-name metabase-dev-config-db-type))
+      (setenv "MB_DB_CONNECTION_URI" connection-uri)))
 
   ;; Set common environment variables
   (setenv "MB_DANGEROUS_UNSAFE_ENABLE_TESTING_H2_CONNECTIONS_DO_NOT_ENABLE" "true")
@@ -196,20 +410,14 @@ Choose `latest`, `oldest`, or enter a specific version."
       (setenv "MB_PREMIUM_EMBEDDING_TOKEN" "")
       (setenv "MB_EDITION" "oss")))
 
-  ;; Build aliases string
+  ;; Build aliases string (no longer includes database-specific aliases)
   (let* ((base-aliases ":otel:dev:drivers:drivers-dev")
 
          (ee-aliases  (if metabase-dev-config-is-ee
                           ":ee:ee-dev"))
 
-         (db-alias (unless (eq metabase-dev-config-db-type 'h2)
-                     (format ":db/%s-%s"
-                             metabase-dev-config-db-type
-                             metabase-dev-config-db-version)))
-
          (all-aliases (concat base-aliases
                               (or ee-aliases "")
-                              (or db-alias "")
                               metabase-dev-config-additional-aliases)))
 
     ;; Add hook and jack in
@@ -217,25 +425,41 @@ Choose `latest`, `oldest`, or enter a specific version."
     (let ((cider-clojure-cli-aliases all-aliases))
       (cider-jack-in-clj nil))))
 
+;;; --- Database Connection Functions ------------------------------------------
+
+;;;###autoload
+(defun metabase-dev-copy-db-connection ()
+  "Copy the database connection command to the clipboard/kill ring."
+  (interactive)
+  (if (eq metabase-dev-config-db-type 'h2)
+      (message "H2 databases don't support external connections")
+    (let ((container-info (metabase-dev-get-container-info)))
+      (if container-info
+          (let* ((port (plist-get container-info :port))
+                 (command (metabase-dev-build-connection-command port)))
+            (kill-new command)
+            (message "Copied to clipboard: %s" command))
+        (message "No database container found. Start the REPL first to create a database.")))))
+
 ;;; --- REPL Restart Functions -------------------------------------------------
 
 ;;;###autoload
 (defun metabase-dev-restart-repl ()
-  "Restart the Metabase REPL with current configuration (no DB restart)."
+  "Restart the Metabase REPL with current configuration (reuses existing database)."
   (interactive)
   (ignore-errors (cider-quit))
   (metabase-dev-jack-in-with-config))
 
 ;;;###autoload
 (defun metabase-dev-restart-repl-fresh-db ()
-  "Restart the database using bin/mage, then restart the REPL with current configuration."
+  "Restart with a fresh database container, then restart the REPL with current configuration."
   (interactive)
   (ignore-errors (cider-quit))
   (unless (eq metabase-dev-config-db-type 'h2)
-    (let ((db-spec (format "%s %s" metabase-dev-config-db-type metabase-dev-config-db-version)))
-      (message "Starting fresh database: %s" db-spec)
-      (projectile-run-shell-command-in-root
-       (format "bin/mage start-db %s" db-spec))))
+    (message "Starting fresh database container...")
+    (let* ((container-info (metabase-dev-ensure-container t))
+           (port (plist-get container-info :port)))
+      (message "Fresh database started on port %s" port)))
   (metabase-dev-jack-in-with-config))
 
 ;;; --- Transient Menu ---------------------------------------------------------
@@ -264,6 +488,7 @@ Choose `latest`, `oldest`, or enter a specific version."
      ["Actions"
       ("r" "Restart REPL" metabase-dev-restart-repl)
       ("R" "Restart with Fresh DB" metabase-dev-restart-repl-fresh-db)
+      ("c" "Copy DB Connection Command" metabase-dev-copy-db-connection)
       ("q" "Quit REPL" cider-quit)]]))
 
 (provide 'metabase-dev)
