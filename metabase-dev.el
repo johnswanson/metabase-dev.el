@@ -313,7 +313,7 @@ Returns container info plist."
 ;;; --- Core Jack-In Function --------------------------------------------------
 
 ;;;###autoload
-(defun metabase-dev-jack-in-with-config ()
+(defun metabase-dev-set-up-env ()
   "Start a Metabase REPL using the current configuration state."
   (interactive)
   (metabase-dev-reset-env!)
@@ -352,9 +352,10 @@ Returns container info plist."
         (setenv "METASTORE_DEV_SERVER_URL" "https://token-check.staging.metabase.com"))
     (progn
       (setenv "MB_PREMIUM_EMBEDDING_TOKEN" "")
-      (setenv "MB_EDITION" "oss")))
+      (setenv "MB_EDITION" "oss"))))
 
-  ;; Build aliases string (no longer includes database-specific aliases)
+(defun metabase-dev-current-aliases ()
+  "Get the currently applicable aliases"
   (let* ((base-aliases ":otel:dev:drivers:drivers-dev")
 
          (ee-aliases  (if metabase-dev-config-is-ee
@@ -363,10 +364,20 @@ Returns container info plist."
          (all-aliases (concat base-aliases
                               (or ee-aliases "")
                               metabase-dev-config-additional-aliases)))
+    all-aliases))
+
+;;;###autoload
+(defun metabase-dev-jack-in-with-config ()
+  "Start a Metabase REPL using the current configuration state."
+  (interactive)
+  (metabase-dev-set-up-env)
+
+  ;; Build aliases string (no longer includes database-specific aliases)
+  (let* ((aliases (metabase-dev-current-aliases)))
 
     ;; Add hook and jack in
     (add-hook 'cider-connected-hook 'metabase-dev-send-dev)
-    (let ((cider-clojure-cli-aliases all-aliases))
+    (let ((cider-clojure-cli-aliases aliases))
       (cider-jack-in-clj nil))))
 
 ;;; --- Database Connection Functions ------------------------------------------
@@ -384,6 +395,26 @@ Returns container info plist."
             (kill-new command)
             (message "Copied to clipboard: %s" command))
         (message "No database container found. Start the REPL first to create a database.")))))
+
+;;; --- Run Clojure Commands ---------------------------------------------------
+
+;;;###autoload
+(defun metabase-dev-run (args)
+  "Run a Clojure command with ARGS using the current Metabase configuration.
+Sets up environment variables and includes current aliases plus :run.
+Shows streaming output in a compilation buffer.
+Example: (metabase-dev-run \"dump-to-h2 '/path/to/metabase.db'\")"
+  (interactive "sArguments: ")
+  (metabase-dev-set-up-env)
+
+  (let* ((aliases (metabase-dev-current-aliases))
+         (all-aliases (concat aliases ":run"))
+         (cmd (format "clojure -M%s %s" all-aliases args))
+         (default-directory (projectile-project-root))
+         (compilation-buffer-name-function
+          (lambda (_mode) (format "*metabase-run: %s*" args))))
+    (message "Running: %s" cmd)
+    (compile cmd)))
 
 ;;; --- REPL Restart Functions -------------------------------------------------
 
