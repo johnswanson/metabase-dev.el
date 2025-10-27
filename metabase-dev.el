@@ -148,42 +148,28 @@ Choose `latest`, `oldest`, or enter a specific version."
   "Get the full path to the port file in the project root."
   (expand-file-name metabase-dev-port-file (projectile-project-root)))
 
-(defun metabase-dev-read-port-file ()
-  "Read the port file and return its contents as a plist."
-  (let ((file-path (metabase-dev-port-file-path)))
-    (when (file-exists-p file-path)
-      (with-temp-buffer
-        (insert-file-contents file-path)
-        (read (buffer-string))))))
-
 (defun metabase-dev-write-port-file (data)
   "Write DATA (a plist) to the port file."
   (let ((file-path (metabase-dev-port-file-path)))
     (with-temp-file file-path
       (prin1 data (current-buffer)))))
 
-(defun metabase-dev-get-container-info ()
-  "Get container info for the current database configuration."
-  (let* ((port-data (metabase-dev-read-port-file))
-         (db-key (intern (format "%s-%s" metabase-dev-config-db-type metabase-dev-config-db-version))))
-    (plist-get port-data db-key)))
-
-(defun metabase-dev-save-container-info (container-name container-id port image-digest)
-  "Save container info to the port file."
-  (let* ((port-data (or (metabase-dev-read-port-file) '()))
-         (db-key (intern (format "%s-%s" metabase-dev-config-db-type metabase-dev-config-db-version)))
-         (info (list :container-name container-name
-                     :container-id container-id
-                     :port port
-                     :image-digest image-digest
-                     :db-type metabase-dev-config-db-type
-                     :db-version metabase-dev-config-db-version)))
-    (setq port-data (plist-put port-data db-key info))
-    (metabase-dev-write-port-file port-data)))
 
 (defun metabase-dev-container-name ()
   "Generate a container name for the current database configuration."
   (format "metabase-dev-%s-%s" metabase-dev-config-db-type metabase-dev-config-db-version))
+
+(defun metabase-dev-container-info ()
+  "Gets the current container info"
+  (let* ((container-name (metabase-dev-container-name))
+         (port (metabase-dev-get-container-port container-name))
+         (image-name (metabase-dev-docker-image-name))
+         (container-id (string-trim (shell-command-to-string
+                                     (format "docker ps -aq --filter name=^%s$" container-name)))))
+    (list :container-name container-name
+          :container-id container-id
+          :port port
+          :image-digest (metabase-dev-get-image-digest image-name))))
 
 (defun metabase-dev-docker-image-name ()
   "Get the Docker image name for the current database configuration."
@@ -256,19 +242,9 @@ Returns a plist with :container-name, :container-id, :port, and :image-digest."
 
     ;; Create and start the container
     (message "Creating container: %s" container-name)
-    (let ((container-id (string-trim (shell-command-to-string cmd))))
-
-      ;; Wait a moment for the container to fully start
-      (sleep-for 2)
-
-      ;; Get the exposed port
-      (let ((port (metabase-dev-get-container-port container-name))
-            (digest (metabase-dev-get-image-digest image-name)))
-
-        (list :container-name container-name
-              :container-id container-id
-              :port port
-              :image-digest digest)))))
+    (shell-command-to-string cmd)
+    (sleep-for 2)
+    (metabase-dev-container-info)))
 
 (defun metabase-dev-ensure-container (fresh)
   "Ensure a database container is running.
@@ -286,39 +262,14 @@ Returns container info plist."
      ;; Container exists and is running: reuse it
      ((metabase-dev-check-container-running container-name)
       (message "Reusing existing container: %s" container-name)
-      (let ((info (metabase-dev-get-container-info)))
-        (unless info
-          ;; Container exists but not in our port file, reconstruct info
-          (let ((port (metabase-dev-get-container-port container-name))
-                (image-name (metabase-dev-docker-image-name))
-                (container-id (string-trim (shell-command-to-string
-                                           (format "docker ps -q --filter name=^%s$" container-name)))))
-            (setq info (list :container-name container-name
-                           :container-id container-id
-                           :port port
-                           :image-digest (metabase-dev-get-image-digest image-name)))
-            (metabase-dev-save-container-info container-name container-id port
-                                             (plist-get info :image-digest))))
-        info))
+      (metabase-dev-container-info))
 
      ;; Container exists but is stopped: restart it
      ((metabase-dev-check-container-exists container-name)
       (message "Starting stopped container: %s" container-name)
       (metabase-dev-start-container container-name)
       (sleep-for 2)
-      (let ((info (metabase-dev-get-container-info)))
-        (unless info
-          (let ((port (metabase-dev-get-container-port container-name))
-                (image-name (metabase-dev-docker-image-name))
-                (container-id (string-trim (shell-command-to-string
-                                           (format "docker ps -aq --filter name=^%s$" container-name)))))
-            (setq info (list :container-name container-name
-                           :container-id container-id
-                           :port port
-                           :image-digest (metabase-dev-get-image-digest image-name)))
-            (metabase-dev-save-container-info container-name container-id port
-                                             (plist-get info :image-digest))))
-        info))
+      (metabase-dev-container-info))
 
      ;; No container exists: create new one
      (t
@@ -380,13 +331,6 @@ Returns container info plist."
       (message "Container info: %s" container-info)
       (message "Using database at port %s" port)
 
-      ;; Save container info to port file
-      (metabase-dev-save-container-info
-       (plist-get container-info :container-name)
-       (plist-get container-info :container-id)
-       port
-       (plist-get container-info :image-digest))
-
       ;; Set Metabase environment variables
       (setenv "MB_DB_TYPE" (symbol-name metabase-dev-config-db-type))
       (setenv "MB_DB_CONNECTION_URI" connection-uri)))
@@ -433,7 +377,7 @@ Returns container info plist."
   (interactive)
   (if (eq metabase-dev-config-db-type 'h2)
       (message "H2 databases don't support external connections")
-    (let ((container-info (metabase-dev-get-container-info)))
+    (let ((container-info (metabase-dev-container-info)))
       (if container-info
           (let* ((port (plist-get container-info :port))
                  (command (metabase-dev-build-connection-command port)))
