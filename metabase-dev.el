@@ -464,7 +464,9 @@ Example: (metabase-dev-run \"dump-to-h2 '/path/to/metabase.db'\")"
       ("r" "Restart REPL" metabase-dev-restart-repl)
       ("R" "Restart with Fresh DB" metabase-dev-restart-repl-fresh-db)
       ("c" "Copy DB Connection Command" metabase-dev-copy-db-connection)
-      ("q" "Quit REPL" cider-quit)]]))
+      ("!" "Quit REPL" cider-quit)
+      ("'" "Run command, a la `clojure -M:run ...`" metabase-dev-run)
+      ("q" "Close" transient-quit-one)]]))
 
 (provide 'metabase-dev)
 ;;; metabase-dev.el ends here
