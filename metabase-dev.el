@@ -48,6 +48,11 @@
   :type 'boolean
   :group 'metabase-dev)
 
+(defcustom metabase-dev-docker-host "localhost"
+  "The docker host to connect to"
+  :type 'string
+  :group 'metabase-dev)
+
 (defcustom metabase-dev-config-ee-token 'all-features
   "The token to use for EE, if any."
   :type '(choice
@@ -278,16 +283,16 @@ Returns container info plist."
 (defun metabase-dev-build-connection-uri (port)
   "Build a connection URI for the current database configuration using PORT."
   (pcase metabase-dev-config-db-type
-    ('postgres (format "postgresql://metabase:password@localhost:%s/metabase" port))
-    ('mysql (format "mysql://metabase:password@localhost:%s/metabase" port))
-    ('mariadb (format "mysql://metabase:password@localhost:%s/metabase" port))))
+    ('postgres (format "postgresql://metabase:password@%s:%s/metabase" metabase-dev-docker-host port))
+    ('mysql (format "mysql://metabase:password@%s:%s/metabase" metabase-dev-docker-host port))
+    ('mariadb (format "mysql://metabase:password@%s:%s/metabase" metabase-dev-docker-host port))))
 
 (defun metabase-dev-build-connection-command (port)
   "Build a shell connection command for the current database configuration using PORT."
   (pcase metabase-dev-config-db-type
-    ('postgres (format "PGPASSWORD=password psql -U metabase -h localhost -p %s metabase" port))
-    ('mysql (format "mysql -u metabase -ppassword -h localhost -P %s metabase" port))
-    ('mariadb (format "mysql -u metabase -ppassword -h localhost -P %s metabase" port))))
+    ('postgres (format "PGPASSWORD=password psql -U metabase -h %s -p %s metabase" metabase-dev-docker-host port))
+    ('mysql (format "mysql -u metabase -ppassword -h %s -P %s metabase" metabase-dev-docker-host port))
+    ('mariadb (format "mysql -u metabase -ppassword -h %s -P %s metabase" metabase-dev-docker-host port))))
 
 (defun metabase-dev-reset-env! ()
   "Reset all MB_* environment variables to start Metabase cleanly."
@@ -332,12 +337,17 @@ Returns container info plist."
       (message "Using database at port %s" port)
 
       ;; Set Metabase environment variables
-      (setenv "MB_DB_TYPE" (symbol-name metabase-dev-config-db-type))
+      (if (eq metabase-dev-config-db-type 'mariadb)
+          (setenv "MB_DB_TYPE" "mysql")
+        (setenv "MB_DB_TYPE" (symbol-name metabase-dev-config-db-type)))
       (setenv "MB_DB_CONNECTION_URI" connection-uri)))
 
   ;; Set common environment variables
   (setenv "MB_DANGEROUS_UNSAFE_ENABLE_TESTING_H2_CONNECTIONS_DO_NOT_ENABLE" "true")
   (setenv "MB_CONFIG_FILE_PATH" metabase-dev-config-config-file)
+
+  (setenv "MB_ENABLE_TEST_ENDPOINTS" "true")
+  (setenv "MB_DANGEROUS_UNSAFE_ENABLE_TESTING_H2_CONNECTIONS_DO_NOT_ENABLE" "true")
 
   ;; Set edition-specific env vars
   (if metabase-dev-config-is-ee
@@ -387,7 +397,10 @@ Returns container info plist."
   "Copy the database connection command to the clipboard/kill ring."
   (interactive)
   (if (eq metabase-dev-config-db-type 'h2)
-      (message "H2 databases don't support external connections")
+      (let* ((file (getenv "MB_DB_FILE"))
+             (command (format "java -cp ~/Downloads/h2-2.4.240.jar org.h2.tools.Shell -url jdbc:h2:tcp://localhost:9092/file:%s" file)))
+        (kill-new command)
+        (message "Copied to clipboard: %s" command))
     (let ((container-info (metabase-dev-container-info)))
       (if container-info
           (let* ((port (plist-get container-info :port))
@@ -409,14 +422,27 @@ Example: (metabase-dev-run \"dump-to-h2 '/path/to/metabase.db'\")"
 
   (let* ((aliases (metabase-dev-current-aliases))
          (all-aliases (concat aliases ":run"))
-         (cmd (format "clojure -M%s %s" all-aliases args))
+         (cmd (format "clojure -J\"-Dc3p0.unreturnedConnectionTimeout=1\" -M%s %s" all-aliases args))
          (default-directory (projectile-project-root))
          (compilation-buffer-name-function
           (lambda (_mode) (format "*metabase-run: %s*" args))))
     (message "Running: %s" cmd)
     (compile cmd)))
 
-;;; --- REPL Restart Functions -------------------------------------------------
+;;;###autoload
+(defun metabase-dev-test (args)
+  (interactive "s:only ")
+  (metabase-dev-set-up-env)
+  (let* ((aliases (metabase-dev-current-aliases))
+         (all-aliases (concat aliases ":test"))
+         (cmd (format "clojure -X%s :exclude-tags '[:mb/driver-tests :mb/transforms-python-test :mb/old-migrations-test]' :only '\"%s\"'"
+                      all-aliases
+                      args))
+         (default-directory (projectile-project-root))
+         (compilation-buffer-name-function
+          (lambda (_mode) (format "*metabase-test: %s*" args))))
+    (message "Running: %s" cmd)
+    (compile cmd)))
 
 ;;;###autoload
 (defun metabase-dev-restart-repl ()
@@ -467,6 +493,25 @@ Example: (metabase-dev-run \"dump-to-h2 '/path/to/metabase.db'\")"
       ("!" "Quit REPL" cider-quit)
       ("'" "Run command, a la `clojure -M:run ...`" metabase-dev-run)
       ("q" "Close" transient-quit-one)]]))
+
+(defun metabase-dev-cider-test-run-ns-prefix (prefix &optional include-non-test-ns)
+  "run clojure.test for every namespace whose name starts with PREFIX.
+by default only *-test namespaces are run; pass a prefix arg to include all."
+  (interactive "sns prefix (e.g. metabase-enterprise.tenants.): \nP")
+  ;; make sure we have a repl
+  (cider-ensure-connected)
+  ;; ask nrepl for all known namespaces, filter, then run cider’s existing ns runner
+  (let* ((all-ns (cider-sync-request:ns-list))  ;; -> list of strings
+         (matches (seq-filter
+                   (lambda (ns)
+                     (and (string-prefix-p prefix ns)
+                          (or include-non-test-ns
+                              (string-suffix-p "-test" ns))))
+                   all-ns)))
+    (if (null matches)
+        (message "no namespaces match %s" prefix)
+      (dolist (ns matches)
+        (cider-test-execute ns)))))
 
 (provide 'metabase-dev)
 ;;; metabase-dev.el ends here
